@@ -4,24 +4,25 @@ import argparse
 import csv
 import logging
 import sys
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from typing import Dict, List
-
-from brevo_python import Configuration, ApiClient
-from brevo_python import TransactionalEmailsApi
-from brevo_python import SendSmtpEmail
-from jinja2 import Template, StrictUndefined, Environment, sandbox
+from jinja2 import StrictUndefined, sandbox
 
 class PaperCoV2:
-	def __init__(self, api_key: str, csv_path: str, email_title: str, 
-			email_body_path: str, verbose: bool, log_path: str, log_level: str,
-			sender_email: str, sender_name: str):
-		self.api_key = api_key
+	def __init__(self, smtp_host: str, smtp_port: int, smtp_user: str, smtp_password: str,
+			 csv_path: str, email_title: str, email_body_path: str, sender_email: str,
+			 verbose: bool, log_path: str, log_level: str):
+		self.smtp_host = smtp_host
+		self.smtp_port = smtp_port
+		self.smtp_user = smtp_user
+		self.smtp_password = smtp_password
 		self.csv_path = csv_path
 		self.email_title = email_title
 		self.email_body_path = email_body_path
-		self.verbose = verbose
 		self.sender_email = sender_email
-		self.sender_name = sender_name
+		self.verbose = verbose
 
 		# Setup logging
 		log_level_map = {
@@ -40,13 +41,7 @@ class PaperCoV2:
 		)
 		self.logger = logging.getLogger(__name__)
 
-		# Initialize Brevo client
-		self.configuration = Configuration()
-		self.configuration.api_key['api-key'] = api_key
-		self.api_client = ApiClient(self.configuration)
-		self.api_instance = TransactionalEmailsApi(self.api_client)
-
-		# Initialize Jinja2 sandbox environment with safe defaults
+		# Initialize Jinja2 sandbox environment
 		self.env = sandbox.SandboxedEnvironment(
 			undefined=StrictUndefined,
 			autoescape=True,
@@ -79,50 +74,59 @@ class PaperCoV2:
 			sys.exit(1)
 
 	def load_email_header(self) -> str:
-		"""Load email body template from file."""
+		"""Load email header template from file."""
 		try:
 			with open(self.email_title, 'r', encoding='utf-8') as file:
 				template = file.read()
-			self.logger.info('Successfully loaded email body template')
+			self.logger.info('Successfully loaded email header template')
 			return template
 		except Exception as e:
-			self.logger.error(f'Error loading email body template: {str(e)}')
+			self.logger.error(f'Error loading email header template: {str(e)}')
 			sys.exit(1)
 
 	def send_emails(self):
-		"""Send batch email campaign using Brevo API."""
+		"""Send batch email campaign using SMTP."""
 		data = self.load_csv_data()
 		body_template = self.load_email_body()
 		header_template = self.load_email_header()
 
-		for row in data:
-			try:
-				# Convert all values in row to strings to prevent template rendering issues
-				safe_row = {k: str(v) if v is not None else '' for k, v in row.items()}
+		try:
+			# Create SMTP connection
+			with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+				server.starttls()
+				server.login(self.smtp_user, self.smtp_password)
 
-				# Create templates using sandboxed environment
-				title_template = self.env.from_string(header_template)
-				body_template_obj = self.env.from_string(body_template)
+				for row in data:
+					try:
+						# Convert all values in row to strings
+						safe_row = {k: str(v) if v is not None else '' for k, v in row.items()}
 
-				# Render templates with sanitized row data
-				subject = title_template.render(**safe_row)
-				html_content = body_template_obj.render(**safe_row)
+						# Create templates using sandboxed environment
+						title_template = self.env.from_string(header_template)
+						body_template_obj = self.env.from_string(body_template)
 
-				# Prepare email
-				email = SendSmtpEmail(
-					to=[{"email": row['Email']}],
-					subject=subject,
-					html_content=html_content,
-					sender={"name": self.sender_name, "email": self.sender_email}
-				)
+						# Render templates with sanitized row data
+						subject = title_template.render(**safe_row)
+						html_content = body_template_obj.render(**safe_row)
 
-				# Send email
-				response = self.api_instance.send_transac_email(email)
-				if self.verbose:
-					self.logger.info(f'Sent email to {row["Email"]} with message ID: {response.message_id}')
+						# Create message
+						msg = MIMEMultipart('alternative')
+						msg['Subject'] = subject
+						msg['From'] = self.sender_email
+						msg['To'] = row['Email']
+						msg.attach(MIMEText(html_content, 'html'))
 
-			except Exception as e:
-				self.logger.error(f'Error sending email to {row.get("Email")}: {str(e)}')
+						# Send email
+						server.send_message(msg)
+						if self.verbose:
+							self.logger.info(f'Sent email to {row["Email"]}')
+
+					except Exception as e:
+						self.logger.error(f'Error sending email to {row.get("Email")}: {str(e)}')
+
+		except Exception as e:
+			self.logger.error(f'SMTP connection error: {str(e)}')
+			sys.exit(1)
 
 	def run(self):
 		"""Main execution method."""
@@ -135,30 +139,34 @@ class PaperCoV2:
 
 def main():
 	parser = argparse.ArgumentParser(description='PaperCo Version 2.0 - Email Campaign Manager')
-	parser.add_argument('-k', '--key', required=True, help='Brevo API Key')
+	parser.add_argument('--smtp-host', required=True, help='SMTP server hostname')
+	parser.add_argument('--smtp-port', type=int, required=True, help='SMTP server port')
+	parser.add_argument('--smtp-user', required=True, help='SMTP username')
+	parser.add_argument('--smtp-password', required=True, help='SMTP password')
+	parser.add_argument('--sender-email', required=True, help='Sender email address')
 	parser.add_argument('--csv', required=True, help='Path to CSV database')
 	parser.add_argument('-H', '--header', required=True, help='Email title/subject')
 	parser.add_argument('-B', '--body', required=True, help='Path to email body template file')
 	parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
 	parser.add_argument('-l', '--log', help='Path to log file')
-	parser.add_argument('--log-level', default='INFO', 
+	parser.add_argument('--log-level', default='INFO',
 			choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
 			help='Set the logging level')
-	parser.add_argument('--sender-email', required=True, help='Email address of the sender')
-	parser.add_argument('--sender-name', required=True, help='Name of the sender')
 
 	args = parser.parse_args()
 
 	app = PaperCoV2(
-		api_key=args.key,
+		smtp_host=args.smtp_host,
+		smtp_port=args.smtp_port,
+		smtp_user=args.smtp_user,
+		smtp_password=args.smtp_password,
 		csv_path=args.csv,
 		email_title=args.header,
 		email_body_path=args.body,
+		sender_email=args.sender_email,
 		verbose=args.verbose,
 		log_path=args.log,
-		log_level=args.log_level,
-		sender_email=args.sender_email,
-		sender_name=args.sender_name
+		log_level=args.log_level
 	)
 	app.run()
 
