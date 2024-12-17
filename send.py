@@ -12,8 +12,9 @@ from jinja2 import StrictUndefined, sandbox
 
 class PaperCoV2:
 	def __init__(self, smtp_host: str, smtp_port: int, smtp_user: str, smtp_password: str,
-			 csv_path: str, email_title: str, email_body_path: str, sender_email: str,
-			 verbose: bool, log_path: str, log_level: str):
+			 csv_path: str = None, email_title: str = None, email_body_path: str = None, sender_email: str = None,
+			 verbose: bool = False, log_path: str = None, log_level: str = 'INFO',
+			 single_email: str = None, single_data: Dict = None):
 		self.smtp_host = smtp_host
 		self.smtp_port = smtp_port
 		self.smtp_user = smtp_user
@@ -23,6 +24,8 @@ class PaperCoV2:
 		self.email_body_path = email_body_path
 		self.sender_email = sender_email
 		self.verbose = verbose
+		self.single_email = single_email
+		self.single_data = single_data or {}
 
 		# Setup logging
 		log_level_map = {
@@ -84,14 +87,50 @@ class PaperCoV2:
 			self.logger.error(f'Error loading email header template: {str(e)}')
 			sys.exit(1)
 
-	def send_emails(self):
+	def send_single_email(self):
+		"""Send a single email using provided data."""
+		body_template = self.load_email_body()
+		header_template = self.load_email_header()
+
+		try:
+			with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+				server.starttls()
+				server.login(self.smtp_user, self.smtp_password)
+
+				# Prepare email data
+				safe_data = {k: str(v) if v is not None else '' for k, v in self.single_data.items()}
+				safe_data['Email'] = self.single_email
+
+				# Create templates using sandboxed environment
+				title_template = self.env.from_string(header_template)
+				body_template_obj = self.env.from_string(body_template)
+
+				# Render templates
+				subject = title_template.render(**safe_data)
+				html_content = body_template_obj.render(**safe_data)
+
+				# Create message
+				msg = MIMEMultipart('alternative')
+				msg['Subject'] = subject
+				msg['From'] = self.sender_email
+				msg['To'] = self.single_email
+				msg.attach(MIMEText(html_content, 'html'))
+
+				# Send email
+				server.send_message(msg)
+				self.logger.info(f'Successfully sent single email to {self.single_email}')
+
+		except Exception as e:
+			self.logger.error(f'Error sending single email: {str(e)}')
+			sys.exit(1)
+
+	def send_batch_emails(self):
 		"""Send batch email campaign using SMTP."""
 		data = self.load_csv_data()
 		body_template = self.load_email_body()
 		header_template = self.load_email_header()
 
 		try:
-			# Create SMTP connection
 			with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
 				server.starttls()
 				server.login(self.smtp_user, self.smtp_password)
@@ -131,8 +170,12 @@ class PaperCoV2:
 	def run(self):
 		"""Main execution method."""
 		try:
-			self.send_emails()
-			self.logger.info('Email campaign completed')
+			if self.single_email:
+				self.send_single_email()
+				self.logger.info('Single email sent successfully')
+			else:
+				self.send_batch_emails()
+				self.logger.info('Email campaign completed')
 		except Exception as e:
 			self.logger.error(f'Campaign failed: {str(e)}')
 			sys.exit(1)
@@ -144,7 +187,7 @@ def main():
 	parser.add_argument('--smtp-user', required=True, help='SMTP username')
 	parser.add_argument('--smtp-password', required=True, help='SMTP password')
 	parser.add_argument('--sender-email', required=True, help='Sender email address')
-	parser.add_argument('--csv', required=True, help='Path to CSV database')
+	parser.add_argument('--csv', help='Path to CSV database')
 	parser.add_argument('-H', '--header', required=True, help='Email title/subject')
 	parser.add_argument('-B', '--body', required=True, help='Path to email body template file')
 	parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output')
@@ -152,8 +195,14 @@ def main():
 	parser.add_argument('--log-level', default='INFO',
 			choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
 			help='Set the logging level')
+	parser.add_argument('--single-email', help='Send to a single email address instead of batch sending')
+	parser.add_argument('--data', help='JSON string of template data for single email', default='{}')
 
 	args = parser.parse_args()
+
+	# Validate arguments
+	if not args.single_email and not args.csv:
+		parser.error('Either --csv or --single-email must be provided')
 
 	app = PaperCoV2(
 		smtp_host=args.smtp_host,
@@ -166,7 +215,9 @@ def main():
 		sender_email=args.sender_email,
 		verbose=args.verbose,
 		log_path=args.log,
-		log_level=args.log_level
+		log_level=args.log_level,
+		single_email=args.single_email,
+		single_data=eval(args.data) if args.single_email else None
 	)
 	app.run()
 
