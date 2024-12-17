@@ -1,62 +1,77 @@
-# PaperCo Email Campaign Manager v2.0.4
+# SMTP Newsletter Python
 
-A Python-based email campaign management tool that uses the Brevo API to send personalized email campaigns using CSV data and templated content.
+A robust Python application for managing and sending bulk email campaigns using SMTP with template support and comprehensive logging.
 
 ## Features
 
-- CSV-based recipient management
-- Templated email content using Jinja2
-- Secure template rendering with sandboxed environment
-- Configurable logging levels and output
+- Secure SMTP email sending with TLS support
+- CSV database integration for recipient management
+- Templated email content using Jinja2 with sandbox security
+- Customizable email headers and body content
+- Comprehensive logging system with multiple log levels
 - Verbose mode for detailed operation tracking
-- Error handling and reporting
 
 ## Prerequisites
 
 - Python 3.x
-- Brevo API key
 - Required Python packages:
-  - brevo_python
   - jinja2
+  - typing
 
 ## Installation
 
-1. Clone the repository
-2. Install required packages:
-
 ```bash
-pip install brevo_python jinja2
+git clone https://github.com/hoytnix/SMTP-Newsletter-Python.git
+cd SMTP-Newsletter-Python
 ```
 
 ## Usage
 
 ```bash
-python send.py -k YOUR_API_KEY --csv recipients.csv -H email_header.txt -B email_body.txt [-v] [-l log_file.log] [--log-level LEVEL]
+python3 send.py \
+  --smtp-host <smtp_server> \
+  --smtp-port <port_number> \
+  --smtp-user <username> \
+  --smtp-password <password> \
+  --sender-email <sender@example.com> \
+  --csv <path_to_csv> \
+  -H <email_header_template> \
+  -B <email_body_template> \
+  [-v] \
+  [--log <log_file_path>] \
+  [--log-level {DEBUG,INFO,WARNING,ERROR,CRITICAL}]
 ```
 
-### Command Line Arguments
+### Required Arguments
 
-- `-k, --key`: Brevo API Key (required)
-- `--csv`: Path to CSV database file (required)
-- `-H, --header`: Email title/subject template file (required)
-- `-B, --body`: Path to email body template file (required)
+- `--smtp-host`: SMTP server hostname
+- `--smtp-port`: SMTP server port number
+- `--smtp-user`: SMTP authentication username
+- `--smtp-password`: SMTP authentication password
+- `--sender-email`: Email address used as sender
+- `--csv`: Path to CSV file containing recipient data
+- `-H, --header`: Path to email title/subject template
+- `-B, --body`: Path to email body template file
+
+### Optional Arguments
+
 - `-v, --verbose`: Enable verbose output
-- `-l, --log`: Path to log file (optional)
-- `--log-level`: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- `--log`: Path to log file (if not specified, logs to console)
+- `--log-level`: Set logging level (default: INFO)
 
 ## CSV Format
 
-The CSV file must contain at least an 'Email' column. Additional columns can be used as template variables.
+The CSV file should contain at least an 'Email' column. Additional columns can be used as template variables.
 
 Example:
 ```csv
 Email,Name,Company
-user@example.com,John Doe,ACME Inc
+user@example.com,John Doe,ACME Inc.
 ```
 
 ## Template Format
 
-Both email subject and body templates support Jinja2 syntax for personalization.
+The application uses Jinja2 templates for both email subject and body. Variables from the CSV can be used in templates.
 
 Example header template:
 ```
@@ -65,24 +80,31 @@ Welcome to {{ Company }}, {{ Name }}!
 
 Example body template:
 ```html
+<html>
+<body>
 <h1>Hello {{ Name }},</h1>
-<p>Welcome to {{ Company }}...</p>
+<p>Welcome to {{ Company }}!</p>
+</body>
+</html>
 ```
-
-## Logging
-
-The application supports various logging levels and can output logs to either a file or console.
-
-## Error Handling
-
-The application includes comprehensive error handling for:
-- CSV file loading
-- Template processing
-- Email sending
-- API communication
 
 ## Security
 
-- Uses Jinja2 sandboxed environment for secure template rendering
+- Uses TLS for SMTP connections
+- Implements Jinja2 sandbox for template rendering
 - Sanitizes template variables
-- Secure API key handling
+- Secure error handling and logging
+
+## Error Handling
+
+The application includes comprehensive error handling:
+- CSV loading errors
+- Template parsing errors
+- SMTP connection issues
+- Individual email sending failures
+
+All errors are logged according to the specified log level.
+
+## Version
+
+Current version: 2.0.6
