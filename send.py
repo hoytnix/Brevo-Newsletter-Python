@@ -5,6 +5,7 @@ import csv
 import logging
 import sys
 import smtplib
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Dict, List
@@ -14,7 +15,7 @@ class PaperCoV2:
 	def __init__(self, smtp_host: str, smtp_port: int, smtp_user: str, smtp_password: str,
 			 csv_path: str = None, email_title: str = None, email_body_path: str = None, sender_email: str = None,
 			 verbose: bool = False, log_path: str = None, log_level: str = 'INFO',
-			 single_email: str = None, single_data: Dict = None):
+			 single_email: str = None, single_data: Dict = None, use_ssl: bool = False):
 		self.smtp_host = smtp_host
 		self.smtp_port = smtp_port
 		self.smtp_user = smtp_user
@@ -26,6 +27,7 @@ class PaperCoV2:
 		self.verbose = verbose
 		self.single_email = single_email
 		self.single_data = single_data or {}
+		self.use_ssl = use_ssl
 
 		# Setup logging
 		log_level_map = {
@@ -87,42 +89,59 @@ class PaperCoV2:
 			self.logger.error(f'Error loading email header template: {str(e)}')
 			sys.exit(1)
 
+	def create_smtp_connection(self):
+		"""Create and return SMTP connection based on SSL settings."""
+		if self.use_ssl:
+			server = smtplib.SMTP_SSL(self.smtp_host, self.smtp_port, timeout=30)
+		else:
+			server = smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=30)
+			server.starttls(timeout=20)
+		return server
+
 	def send_single_email(self):
-		"""Send a single email using provided data."""
+		"""Send a single email using provided data with improved error handling and retry logic."""
 		body_template = self.load_email_body()
 		header_template = self.load_email_header()
 
-		try:
-			with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-				server.starttls()
-				server.login(self.smtp_user, self.smtp_password)
+		max_retries = 3
+		retry_delay = 5
 
-				# Prepare email data
-				safe_data = {k: str(v) if v is not None else '' for k, v in self.single_data.items()}
-				safe_data['Email'] = self.single_email
+		for attempt in range(max_retries):
+			try:
+				with self.create_smtp_connection() as server:
+					server.login(self.smtp_user, self.smtp_password)
 
-				# Create templates using sandboxed environment
-				title_template = self.env.from_string(header_template)
-				body_template_obj = self.env.from_string(body_template)
+					# Prepare email data
+					safe_data = {k: str(v) if v is not None else '' for k, v in self.single_data.items()}
+					safe_data['Email'] = self.single_email
 
-				# Render templates
-				subject = title_template.render(**safe_data)
-				html_content = body_template_obj.render(**safe_data)
+					# Create templates using sandboxed environment
+					title_template = self.env.from_string(header_template)
+					body_template_obj = self.env.from_string(body_template)
 
-				# Create message
-				msg = MIMEMultipart('alternative')
-				msg['Subject'] = subject
-				msg['From'] = self.sender_email
-				msg['To'] = self.single_email
-				msg.attach(MIMEText(html_content, 'html'))
+					# Render templates
+					subject = title_template.render(**safe_data)
+					html_content = body_template_obj.render(**safe_data)
 
-				# Send email
-				server.send_message(msg)
-				self.logger.info(f'Successfully sent single email to {self.single_email}')
+					# Create message
+					msg = MIMEMultipart('alternative')
+					msg['Subject'] = subject
+					msg['From'] = self.sender_email
+					msg['To'] = self.single_email
+					msg.attach(MIMEText(html_content, 'html'))
 
-		except Exception as e:
-			self.logger.error(f'Error sending single email: {str(e)}')
-			sys.exit(1)
+					# Send email
+					server.send_message(msg)
+					self.logger.info(f'Successfully sent single email to {self.single_email}')
+					return
+
+			except (smtplib.SMTPServerDisconnected, ConnectionResetError) as e:
+				if attempt < max_retries - 1:
+					self.logger.warning(f'Attempt {attempt + 1} failed: {str(e)}. Retrying in {retry_delay} seconds...')
+					time.sleep(retry_delay)
+					continue
+				self.logger.error(f'All retry attempts failed. Last error: {str(e)}')
+				raise
 
 	def send_batch_emails(self):
 		"""Send batch email campaign using SMTP."""
@@ -131,8 +150,7 @@ class PaperCoV2:
 		header_template = self.load_email_header()
 
 		try:
-			with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
-				server.starttls()
+			with self.create_smtp_connection() as server:
 				server.login(self.smtp_user, self.smtp_password)
 
 				for row in data:
@@ -197,6 +215,7 @@ def main():
 			help='Set the logging level')
 	parser.add_argument('--single-email', help='Send to a single email address instead of batch sending')
 	parser.add_argument('--data', help='JSON string of template data for single email', default='{}')
+	parser.add_argument('--use-ssl', action='store_true', help='Use SSL for SMTP connection')
 
 	args = parser.parse_args()
 
@@ -217,9 +236,10 @@ def main():
 		log_path=args.log,
 		log_level=args.log_level,
 		single_email=args.single_email,
-		single_data=eval(args.data) if args.single_email else None
+		single_data=eval(args.data) if args.single_email else None,
+		use_ssl=args.use_ssl
 	)
 	app.run()
 
 if __name__ == '__main__':
-	main()
+    main()
